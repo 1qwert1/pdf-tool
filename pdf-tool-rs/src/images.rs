@@ -102,8 +102,8 @@ fn flatten_alpha(rgba: &image::RgbaImage) -> image::RgbImage {
 /// Читает изображение, учитывает EXIF-ориентацию и готовит его к вставке.
 pub fn prepare(path: &Path) -> Result<PreparedImage> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let bytes = std::fs::read(path).with_context(|| format!("Не удалось прочитать «{name}»"))?;
-    prepare_bytes(&bytes).with_context(|| format!("Не удалось открыть изображение «{name}»"))
+    let bytes = std::fs::read(path).with_context(|| trf!("Не удалось прочитать «{name}»", "Could not read “{name}”"))?;
+    prepare_bytes(&bytes).with_context(|| trf!("Не удалось открыть изображение «{name}»", "Could not open image “{name}”"))
 }
 
 pub fn prepare_bytes(bytes: &[u8]) -> Result<PreparedImage> {

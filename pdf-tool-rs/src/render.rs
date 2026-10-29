@@ -10,14 +10,26 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use eframe::egui;
 use pdfium_render::prelude::*;
 
+/// Что рисуем: миниатюры списка или крупную страницу для редактора.
+/// У каждого вида своя очередь: новое задание заменяет только задание того же вида.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Purpose {
+    Thumb,
+    Page,
+}
+
 /// Задание: отрисовать указанные страницы документа.
 struct Job {
+    purpose: Purpose,
     generation: u64,
     bytes: Arc<Vec<u8>>,
     pages: Vec<usize>,
+    /// Ширина в пикселях (для миниатюр высота ограничена 1.42 × ширина).
+    width: u32,
 }
 
 pub struct Thumb {
+    pub purpose: Purpose,
     pub generation: u64,
     pub index: usize,
     pub image: egui::ColorImage,
@@ -56,11 +68,11 @@ fn bind() -> Result<Pdfium, String> {
     }
     Pdfium::bind_to_system_library()
         .map(Pdfium::new)
-        .map_err(|_| "библиотека PDFium не найдена — миниатюры отключены".to_owned())
+        .map_err(|_| crate::i18n::tr("библиотека PDFium не найдена — миниатюры отключены", "PDFium library not found — thumbnails are disabled").to_owned())
 }
 
 impl Renderer {
-    pub fn start(ctx: egui::Context, thumb_size: u32) -> Self {
+    pub fn start(ctx: egui::Context) -> Self {
         let (jobs_tx, jobs_rx) = channel::<Job>();
         let (results_tx, results_rx) = channel();
         let (status_tx, status_rx) = channel();
@@ -78,55 +90,88 @@ impl Renderer {
                         return;
                     }
                 };
-                worker(&pdfium, &jobs_rx, &results_tx, &ctx, thumb_size);
+                worker(&pdfium, &jobs_rx, &results_tx, &ctx);
             })
-            .expect("не удалось запустить поток отрисовки");
+            .expect("failed to start the render thread");
 
-        let unavailable = status_rx.recv().unwrap_or_else(|_| Some("поток отрисовки завершился".into()));
+        let unavailable = status_rx.recv().unwrap_or_else(|_| Some(crate::i18n::tr("поток отрисовки завершился", "render thread stopped").into()));
         Renderer { jobs: jobs_tx, results: results_rx, unavailable }
     }
 
-    pub fn request(&self, generation: u64, bytes: Arc<Vec<u8>>, pages: Vec<usize>) {
+    pub fn request(&self, purpose: Purpose, generation: u64, bytes: Arc<Vec<u8>>, pages: Vec<usize>, width: u32) {
         if self.unavailable.is_none() && !pages.is_empty() {
-            let _ = self.jobs.send(Job { generation, bytes, pages });
+            let _ = self.jobs.send(Job { purpose, generation, bytes, pages, width });
         }
     }
 }
 
-fn worker(pdfium: &Pdfium, jobs: &Receiver<Job>, results: &Sender<Thumb>, ctx: &egui::Context, size: u32) {
-    let mut pending: Option<Job> = None;
+/// Последние задания каждого вида; страница редактора рисуется первой.
+#[derive(Default)]
+struct Queue {
+    page: Option<Job>,
+    thumbs: Option<Job>,
+}
+
+impl Queue {
+    fn put(&mut self, job: Job) {
+        match job.purpose {
+            Purpose::Page => self.page = Some(job),
+            Purpose::Thumb => self.thumbs = Some(job),
+        }
+    }
+
+    /// Забирает все пришедшие задания. false — приложение закрыто.
+    fn drain(&mut self, jobs: &Receiver<Job>) -> bool {
+        loop {
+            match jobs.try_recv() {
+                Ok(job) => self.put(job),
+                Err(TryRecvError::Empty) => return true,
+                Err(TryRecvError::Disconnected) => return false,
+            }
+        }
+    }
+}
+
+fn worker(pdfium: &Pdfium, jobs: &Receiver<Job>, results: &Sender<Thumb>, ctx: &egui::Context) {
+    let mut queue = Queue::default();
     loop {
-        let mut job = match pending.take() {
-            Some(job) => job,
-            None => match jobs.recv() {
-                Ok(job) => job,
+        if queue.page.is_none() && queue.thumbs.is_none() {
+            match jobs.recv() {
+                Ok(job) => queue.put(job),
                 Err(_) => return,
-            },
-        };
-        // Берём самое свежее задание, старые больше не нужны
-        while let Ok(newer) = jobs.try_recv() {
-            job = newer;
+            }
+        }
+        if !queue.drain(jobs) {
+            return;
+        }
+        let Some(mut job) = queue.page.take().or_else(|| queue.thumbs.take()) else { continue };
+        let bytes = job.bytes.clone();
+        let Ok(doc) = pdfium.load_pdf_from_byte_slice(&bytes, None) else { continue };
+        let mut config = PdfRenderConfig::new().set_target_width(job.width as Pixels);
+        if job.purpose == Purpose::Thumb {
+            config = config.set_maximum_height((job.width as f32 * 1.42) as Pixels);
         }
 
-        let Ok(doc) = pdfium.load_pdf_from_byte_slice(&job.bytes, None) else { continue };
-        let config = PdfRenderConfig::new()
-            .set_target_width(size as Pixels)
-            .set_maximum_height((size as f32 * 1.42) as Pixels);
-
-        for &index in &job.pages {
-            match jobs.try_recv() {
-                Ok(newer) => {
-                    pending = Some(newer);
+        while !job.pages.is_empty() {
+            // Миниатюры рисуем по одной, проверяя, не пришло ли что-то важнее
+            if job.purpose == Purpose::Thumb {
+                if !queue.drain(jobs) {
+                    return;
+                }
+                if queue.page.is_some() || queue.thumbs.is_some() {
+                    if queue.thumbs.is_none() {
+                        queue.thumbs = Some(job);
+                    }
                     break;
                 }
-                Err(TryRecvError::Disconnected) => return,
-                Err(TryRecvError::Empty) => {}
             }
+            let index = job.pages.remove(0);
             let Ok(page) = doc.pages().get(index as PdfPageIndex) else { continue };
             let Ok(bitmap) = page.render_with_config(&config) else { continue };
             let (w, h) = (bitmap.width() as usize, bitmap.height() as usize);
             let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &bitmap.as_rgba_bytes());
-            if results.send(Thumb { generation: job.generation, index, image }).is_err() {
+            let thumb = Thumb { purpose: job.purpose, generation: job.generation, index, image };
+            if results.send(thumb).is_err() {
                 return;
             }
             ctx.request_repaint();
@@ -141,7 +186,7 @@ mod tests {
 
     #[test]
     fn renders_thumbnails() {
-        let renderer = Renderer::start(egui::Context::default(), 120);
+        let renderer = Renderer::start(egui::Context::default());
         if renderer.unavailable.is_some() {
             eprintln!("PDFium не найден — тест пропущен");
             return;
@@ -156,7 +201,7 @@ mod tests {
         crate::pdf_ops::append_images(&mut doc, vec![crate::images::prepare_bytes(&png).unwrap()]).unwrap();
         let bytes = Arc::new(crate::pdf_ops::save(&mut doc).unwrap());
 
-        renderer.request(1, bytes, vec![0]);
+        renderer.request(Purpose::Thumb, 1, bytes.clone(), vec![0], 120);
         let thumb = renderer.results.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!((thumb.generation, thumb.index), (1, 0));
         // Страница 1:2 вписывается в рамку 120 × 170 по высоте
@@ -164,5 +209,11 @@ mod tests {
         assert!(w <= 120 && h <= 171 && h > w, "{w}x{h}");
         let center = thumb.image.pixels[(h / 2) * w + w / 2];
         assert_eq!((center.r(), center.g(), center.b()), (255, 0, 0));
+
+        // Крупная страница для редактора рисуется без ограничения высоты
+        renderer.request(Purpose::Page, 2, bytes, vec![0], 400);
+        let page = renderer.results.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!((page.purpose, page.generation), (Purpose::Page, 2));
+        assert_eq!(page.image.size, [400, 800]);
     }
 }

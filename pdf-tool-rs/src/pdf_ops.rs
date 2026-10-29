@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use lopdf::{Dictionary, Document, Object, ObjectId, dictionary};
 
+use crate::i18n::tr;
 use crate::images::PreparedImage;
 
 /// Атрибуты страницы, которые могут наследоваться от родительских узлов дерева.
@@ -27,18 +28,18 @@ pub fn load(bytes: &[u8], name: &str) -> Result<Document> {
         doc = load_raw(&patched, name)?;
     }
     if doc.trailer.has(b"Encrypt") {
-        bail!("Файл «{name}» защищён паролем.");
+        bail!(trf!("Файл «{name}» защищён паролем.", "“{name}” is password protected."));
     }
-    pages_root(&doc).with_context(|| format!("В файле «{name}» нет дерева страниц."))?;
+    pages_root(&doc).with_context(|| trf!("В файле «{name}» нет дерева страниц.", "“{name}” has no page tree."))?;
     Ok(doc)
 }
 
 fn load_raw(bytes: &[u8], name: &str) -> Result<Document> {
     Document::load_mem(bytes).map_err(|e| match e {
         lopdf::Error::InvalidPassword | lopdf::Error::Decryption(_) => {
-            anyhow!("Файл «{name}» защищён паролем.")
+            anyhow!(trf!("Файл «{name}» защищён паролем.", "“{name}” is password protected."))
         }
-        e => anyhow!("Не удалось прочитать «{name}» — файл повреждён или не является PDF.\n\n{e}"),
+        e => anyhow!(trf!("Не удалось прочитать «{name}» — файл повреждён или не является PDF.\n\n{e}", "Could not read “{name}”: the file is damaged or not a PDF.\n\n{e}")),
     })
 }
 
@@ -138,14 +139,14 @@ fn write_object(out: &mut Vec<u8>, object: &Object) {
 /// Загружает PDF из файла.
 pub fn load_file(path: &Path) -> Result<(Document, Vec<u8>)> {
     let name = file_name(path);
-    let bytes = std::fs::read(path).with_context(|| format!("Не удалось прочитать «{name}»"))?;
+    let bytes = std::fs::read(path).with_context(|| trf!("Не удалось прочитать «{name}»", "Could not read “{name}”"))?;
     let doc = load(&bytes, &name)?;
     Ok((doc, bytes))
 }
 
 pub fn save(doc: &mut Document) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    doc.save_to(&mut out).context("Не удалось записать PDF")?;
+    doc.save_to(&mut out).context(tr("Не удалось записать PDF", "Could not write the PDF"))?;
     Ok(out)
 }
 
@@ -177,7 +178,7 @@ pub fn page_count(doc: &Document) -> usize {
     doc.get_pages().len()
 }
 
-fn page_ids(doc: &Document) -> Vec<ObjectId> {
+pub(crate) fn page_ids(doc: &Document) -> Vec<ObjectId> {
     doc.get_pages().into_values().collect()
 }
 
@@ -186,7 +187,7 @@ fn pages_root(doc: &Document) -> Result<ObjectId> {
 }
 
 /// Ищет значение наследуемого атрибута у страницы или её предков.
-fn inherited_attr(doc: &Document, page_id: ObjectId, key: &[u8]) -> Option<Object> {
+pub(crate) fn inherited_attr(doc: &Document, page_id: ObjectId, key: &[u8]) -> Option<Object> {
     let mut current = Some(page_id);
     let mut visited = HashSet::new();
     while let Some(id) = current {
@@ -359,7 +360,7 @@ pub fn delete_pages(doc: &mut Document, indices: &BTreeSet<usize>) -> Result<()>
         pages.iter().enumerate().partition(|(i, _)| indices.contains(i));
     let keep: Vec<ObjectId> = keep.into_iter().map(|(_, &id)| id).collect();
     if keep.is_empty() {
-        bail!("Нельзя удалить все страницы");
+        bail!(tr("Нельзя удалить все страницы", "You cannot delete all pages"));
     }
 
     set_page_order(doc, &keep)?;
@@ -379,7 +380,7 @@ pub fn reorder_pages(doc: &mut Document, order: &[usize]) -> Result<()> {
     let mut check: Vec<usize> = order.to_vec();
     check.sort_unstable();
     if check != (0..pages.len()).collect::<Vec<_>>() {
-        bail!("Новый порядок должен быть перестановкой всех страниц");
+        bail!(tr("Новый порядок должен быть перестановкой всех страниц", "The new order must be a permutation of all pages"));
     }
     let new_order: Vec<ObjectId> = order.iter().map(|&i| pages[i]).collect();
     set_page_order(doc, &new_order)
@@ -431,7 +432,7 @@ pub fn append_images(doc: &mut Document, images: Vec<PreparedImage>) -> Result<(
 /// Документ из изображений.
 pub fn images_to_document(images: Vec<PreparedImage>) -> Result<Document> {
     if images.is_empty() {
-        bail!("Не выбрано ни одного изображения");
+        bail!(tr("Не выбрано ни одного изображения", "No images selected"));
     }
     let mut doc = new_document();
     append_images(&mut doc, images)?;
@@ -447,29 +448,29 @@ pub fn split_pages(
 ) -> Result<Vec<PathBuf>> {
     let total = page_count(doc);
     if total == 0 {
-        bail!("Документ не содержит страниц");
+        bail!(tr("Документ не содержит страниц", "The document has no pages"));
     }
     if indices.is_empty() {
-        bail!("Не выбрано ни одной страницы");
+        bail!(tr("Не выбрано ни одной страницы", "No pages selected"));
     }
     std::fs::create_dir_all(output_dir)
-        .with_context(|| format!("Не удалось создать папку {}", output_dir.display()))?;
+        .with_context(|| trf!("Не удалось создать папку {}", "Could not create folder {}", output_dir.display()))?;
 
     let width = total.to_string().len().max(2);
     let mut created = Vec::new();
     for &index in indices {
         if index >= total {
-            bail!("Страница {} не существует (всего {total})", index + 1);
+            bail!(trf!("Страница {} не существует (всего {total})", "Page {} does not exist (total {total})", index + 1));
         }
         let mut single = doc.clone();
         let others: BTreeSet<usize> = (0..total).filter(|&i| i != index).collect();
         if !others.is_empty() {
             delete_pages(&mut single, &others)?;
         }
-        let path = output_dir.join(format!("{prefix}_стр_{:0width$}.pdf", index + 1));
+        let path = output_dir.join(trf!("{prefix}_стр_{:0width$}.pdf", "{prefix}_page_{:0width$}.pdf", index + 1));
         single
             .save(&path)
-            .with_context(|| format!("Не удалось сохранить {}", path.display()))?;
+            .with_context(|| trf!("Не удалось сохранить {}", "Could not save {}", path.display()))?;
         created.push(path);
     }
     Ok(created)

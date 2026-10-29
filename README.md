@@ -1,34 +1,39 @@
 # PDF Tool
 
-Десктопное приложение для **Linux**, **Windows** и **macOS**: сборка PDF из изображений, изменение качества, удаление и добавление страниц.
+A desktop app for **Linux**, **Windows** and **macOS**: build PDFs from images, change quality, delete and add pages. The Python version's interface is in Russian; the Rust version can switch between English and Russian.
 
-## Возможности
+This repository contains two versions:
 
-- **Создать PDF из изображений** — PNG, JPEG, BMP, GIF, TIFF, WebP
-- **Удалить страницы** — выбор нескольких страниц в списке
-- **Добавить страницы** — из изображений или другого PDF, с выбором позиции вставки
-- **Изменить качество** — сжатие через Ghostscript (`/screen`–`/prepress`), иначе PyMuPDF
-- **Разделить на страницы** — каждая страница в отдельный PDF
+- **Python** (this folder): PyQt6 + pikepdf + PyMuPDF, described below.
+- **Rust** ([`pdf-tool-rs/`](pdf-tool-rs/README.md)): a native app with the same features plus text editing, built for all three platforms by GitHub Actions.
 
-## Требования
+## Features (Python version)
+
+- **Create a PDF from images**: PNG, JPEG, BMP, GIF, TIFF, WebP
+- **Delete pages**: select several pages in the list
+- **Add pages** from images or another PDF, at a chosen position
+- **Change quality**: compression via Ghostscript (`/screen`–`/prepress`), otherwise PyMuPDF
+- **Split into pages**: each page as a separate PDF
+
+## Requirements
 
 - Python 3.10+
-- Зависимости из `requirements.txt` (PyQt6, pikepdf, Pillow, PyMuPDF)
-- Ghostscript — рекомендуется для сжатия PDF
+- Dependencies from `requirements.txt` (PyQt6, pikepdf, Pillow, PyMuPDF)
+- Ghostscript: recommended for compression
 
 ---
 
 ## macOS
 
-### 1. Homebrew и Python
+### 1. Homebrew and Python
 
-Если Homebrew ещё нет: https://brew.sh
+If you don't have Homebrew yet: https://brew.sh
 
 ```bash
 brew install python
 ```
 
-### 2. Зависимости проекта
+### 2. Project dependencies
 
 ```bash
 cd pdf-tool
@@ -37,30 +42,30 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Ghostscript (для сжатия)
+### 3. Ghostscript (for compression)
 
 ```bash
 brew install ghostscript
 gs --version
 ```
 
-### 4. Запуск
+### 4. Run
 
 ```bash
 source .venv/bin/activate
 python3 main.py
 ```
 
-Или:
+Or:
 
 ```bash
 chmod +x run.sh run.command
 ./run.sh
 ```
 
-В Finder можно дважды кликнуть **`run.command`** (откроется Terminal).
+In Finder you can double-click **`run.command`** (it opens Terminal).
 
-> Если при запуске из Finder PyQt6 ругается на библиотеки, всегда запускайте из терминала с активированным `.venv`.
+> If PyQt6 complains about libraries when started from Finder, run it from a terminal with `.venv` activated.
 
 ---
 
@@ -68,32 +73,32 @@ chmod +x run.sh run.command
 
 ### 1. Python
 
-Скачайте с [python.org](https://www.python.org/downloads/) (3.10+).  
-При установке отметьте **Add python.exe to PATH**.
+Download it from [python.org](https://www.python.org/downloads/) (3.10+).
+During installation, check **Add python.exe to PATH**.
 
-### 2. Зависимости
+### 2. Dependencies
 
 ```bat
-cd путь\к\pdf-tool
+cd path\to\pdf-tool
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Ghostscript (для сжатия)
+### 3. Ghostscript (for compression)
 
-1. Установщик: https://ghostscript.com/releases/gsdnld.html  
-2. Добавьте в PATH папку `bin` (например `C:\Program Files\gs\gs10.xx.x\bin`)  
-3. В новом терминале: `gswin64c -version`
+1. Installer: https://ghostscript.com/releases/gsdnld.html
+2. Add its `bin` folder to PATH (for example `C:\Program Files\gs\gs10.xx.x\bin`)
+3. In a new terminal: `gswin64c -version`
 
-### 4. Запуск
+### 4. Run
 
 ```bat
 .venv\Scripts\activate
 python main.py
 ```
 
-Или `run.bat`.
+Or `run.bat`.
 
 ---
 
@@ -108,18 +113,18 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
-Или `./run.sh`.
+Or `./run.sh`.
 
-Ярлык в меню (опционально): скопируйте `pdf-tool.desktop` в `~/.local/share/applications/` и поправьте путь в `Exec=`.
+Menu shortcut (optional): copy `pdf-tool.desktop` to `~/.local/share/applications/` and fix the path in `Exec=`.
 
 ---
 
-## Использование
+## Usage
 
-1. **Создать новый документ** / **Открыть PDF** — в правой панели  
-2. Вкладка **«Создать PDF»** — собрать документ из картинок  
-3. Вкладка **«Страницы»** — удалить, добавить, разделить страницы  
-4. Вкладка **«Качество»** — настроить сжатие и применить  
-5. **Сохранить как…** — сохранить результат  
+1. **New document** / **Open PDF** in the right panel
+2. **Create PDF** tab: build a document from images
+3. **Pages** tab: delete, add and split pages
+4. **Quality** tab: set the compression level and apply it
+5. **Save as…**: save the result
 
-Изменения применяются к рабочей копии; исходный файл не перезаписывается до сохранения.
+Changes are applied to a working copy; the original file is not overwritten until you save.

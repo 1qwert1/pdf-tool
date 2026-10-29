@@ -2,8 +2,13 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
+
 mod app;
 mod compress;
+mod edit;
+mod editor;
 mod images;
 mod pdf_ops;
 mod render;
@@ -11,6 +16,7 @@ mod render;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
+    i18n::init();
     // Файл можно передать аргументом: pdf-tool документ.pdf
     let open = std::env::args_os().nth(1).map(PathBuf::from);
 
