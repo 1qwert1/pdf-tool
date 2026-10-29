@@ -1,0 +1,138 @@
+# Сборка PDF Tool (Rust) для Windows, macOS и Linux.
+# Запуск: вручную (Actions → Run workflow) или пушем тега v* — тогда создаётся релиз.
+name: Rust release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  # Версия PDFium должна совпадать с feature pdfium_latest в pdfium-render
+  PDFIUM_RELEASE: chromium/7881
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+    working-directory: pdf-tool-rs
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            pdfium: pdfium-linux-x64
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            pdfium: pdfium-win-x64
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            pdfium: pdfium-mac-arm64
+          - name: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            pdfium: pdfium-mac-x64
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pdf-tool-rs
+          key: ${{ matrix.target }}
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-render0-dev \
+            libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev ghostscript
+
+      - name: Download PDFium
+        run: |
+          mkdir -p pdfium
+          curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_RELEASE//\//%2F}/${{ matrix.pdfium }}.tgz" \
+            | tar -xz -C pdfium
+
+      - name: Test
+        # Тесты x86_64 macOS на ARM-раннере не запустятся без Rosetta-библиотеки PDFium
+        if: matrix.name != 'macos-x64'
+        run: cargo test --release --target ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          name=pdf-tool-${{ matrix.name }}
+          mkdir -p dist/$name
+          cp target/${{ matrix.target }}/release/pdf-tool dist/$name/
+          cp pdfium/lib/libpdfium.so dist/$name/
+          cp pdfium/LICENSE dist/$name/PDFIUM-LICENSE
+          cp packaging/linux/pdf-tool.desktop packaging/linux/install.sh dist/$name/
+          tar -czf dist/$name.tar.gz -C dist $name
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          name=pdf-tool-${{ matrix.name }}
+          mkdir -p dist/$name
+          cp target/${{ matrix.target }}/release/pdf-tool.exe dist/$name/
+          cp pdfium/bin/pdfium.dll dist/$name/
+          cp pdfium/LICENSE dist/$name/PDFIUM-LICENSE.txt
+          cd dist && 7z a -tzip $name.zip $name
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          name=pdf-tool-${{ matrix.name }}
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          app="dist/$name/PDF Tool.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks"
+          cp target/${{ matrix.target }}/release/pdf-tool "$app/Contents/MacOS/"
+          cp pdfium/lib/libpdfium.dylib "$app/Contents/Frameworks/"
+          sed "s/__VERSION__/$version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+          cp pdfium/LICENSE "dist/$name/PDFIUM-LICENSE"
+          # Подпись ad-hoc: без неё Apple Silicon не запустит программу.
+          # Для распространения без предупреждений нужна подпись Developer ID и нотаризация.
+          codesign --force --sign - "$app/Contents/Frameworks/libpdfium.dylib"
+          codesign --force --deep --sign - "$app"
+          hdiutil create -volname "PDF Tool" -srcfolder "dist/$name" -ov -format UDZO "dist/$name.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf-tool-${{ matrix.name }}
+          path: |
+            pdf-tool-rs/dist/*.tar.gz
+            pdf-tool-rs/dist/*.zip
+            pdf-tool-rs/dist/*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
