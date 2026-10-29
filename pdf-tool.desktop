@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=PDF Tool
-Comment=Сборка и редактирование PDF: изображения, качество, страницы
-Exec=/home/cz/Desktop/dev/pdf-tool/run.sh
-Icon=application-pdf
-Terminal=false
-Type=Application
-Categories=Office;Graphics;
-StartupNotify=true

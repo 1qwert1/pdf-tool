@@ -2431,7 +2431,7 @@ checksum = "73072a9470554c8e794778acece2312661218aaabb635600957d952cf01c716e"
 
 [[package]]
 name = "pdf-tool"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "eframe",

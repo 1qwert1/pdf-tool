@@ -1,6 +1,6 @@
 [package]
 name = "pdf-tool"
-version = "1.0.0"
+version = "1.1.0"
 description = "Сборка и редактирование PDF: изображения, качество, страницы"
 edition = "2024"
 rust-version = "1.95"
