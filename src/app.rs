@@ -35,6 +35,9 @@ const SHORTCUT_SAVE: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
 const SHORTCUT_QUIT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Q);
 const SHORTCUT_SELECT_ALL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::A);
+const SHORTCUT_ROTATE_RIGHT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::R);
+const SHORTCUT_ROTATE_LEFT: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::R);
 
 /// Открытый документ: рабочая копия в памяти.
 struct DocState {
@@ -127,6 +130,8 @@ pub struct PdfToolApp {
     generation: u64,
     /// Открытый редактор страницы.
     editor: Option<Editor>,
+    /// Выделение, которое нужно вернуть после фоновой операции (поворот перерисовывает миниатюры).
+    reselect: Option<BTreeSet<usize>>,
     /// Счётчик кадров для отладочного снимка окна (PDF_TOOL_SCREENSHOT).
     #[cfg(debug_assertions)]
     frames: u32,
@@ -156,6 +161,7 @@ impl PdfToolApp {
             allow_close: false,
             generation: 0,
             editor: None,
+            reselect: None,
             #[cfg(debug_assertions)]
             frames: 0,
         };
@@ -200,6 +206,7 @@ impl PdfToolApp {
         match result {
             Ok(outcome) => self.apply(ctx, outcome),
             Err(e) => {
+                self.reselect = None;
                 // Правки остаются в редакторе, их можно исправить и применить снова
                 if let Some(editor) = &mut self.editor {
                     editor.applying = false;
@@ -234,7 +241,7 @@ impl PdfToolApp {
                     None => old.and_then(|o| o.path),
                 };
                 let doc = DocState { bytes: Arc::new(bytes), page_count, path, dirty, thumbs, page_sizes };
-                self.selected = selected;
+                self.selected = self.reselect.take().unwrap_or(selected);
                 self.anchor = None;
                 self.generation += 1;
                 let missing: Vec<usize> = (0..page_count).filter(|&i| doc.thumbs[i].is_none()).collect();
@@ -470,6 +477,28 @@ impl PdfToolApp {
         });
     }
 
+    /// Поворачивает выделенные страницы на `degrees` по часовой стрелке.
+    fn rotate(&mut self, ctx: &egui::Context, degrees: i64) {
+        let Some(doc) = &self.doc else {
+            return self.error(tr("Нет документа", "No document"), tr("Сначала откройте PDF.", "Open a PDF first."));
+        };
+        if self.selected.is_empty() {
+            return self.error(
+                tr("Не выбраны страницы", "No pages selected"),
+                tr("Выберите страницы для поворота.", "Select pages to rotate."),
+            );
+        }
+        let set = self.selected.clone();
+        // Миниатюры повёрнутых страниц перерисуются, остальные сохранятся
+        let map = (0..doc.page_count).map(|i| (!set.contains(&i)).then_some(i)).collect();
+        let count = set.len();
+        self.reselect = Some(set.clone());
+        self.modify(ctx, tr("Поворот…", "Rotating…"), Some(map), move |pdf| {
+            pdf_ops::rotate_pages(pdf, &set, degrees)?;
+            Ok(trf!("Повёрнуто страниц: {count}", "Pages rotated: {count}"))
+        });
+    }
+
     fn ask_delete(&mut self) {
         let Some(doc) = &self.doc else {
             return self.error(tr("Нет документа", "No document"), tr("Сначала откройте PDF.", "Open a PDF first."));
@@ -680,6 +709,12 @@ impl PdfToolApp {
             if !self.selected.is_empty() && ctx.input(|i| i.key_pressed(Key::Delete)) {
                 self.ask_delete();
             }
+            // Сначала с Shift: иначе Ctrl+R перехватит и Ctrl+Shift+R
+            if ctx.input_mut(|i| i.consume_shortcut(&SHORTCUT_ROTATE_LEFT)) {
+                self.rotate(ctx, -90);
+            } else if ctx.input_mut(|i| i.consume_shortcut(&SHORTCUT_ROTATE_RIGHT)) {
+                self.rotate(ctx, 90);
+            }
         }
     }
 
@@ -767,6 +802,25 @@ impl PdfToolApp {
             Tab::Pages => {
                 group(ui, tr("Порядок страниц", "Page order"), |ui| {
                     ui.label(tr("Перетащите миниатюры слева или выберите страницы и нажмите кнопки под списком.", "Drag thumbnails on the left, or select pages and use the buttons below the list."));
+                });
+                group(ui, tr("Поворот страниц", "Rotate pages"), |ui| {
+                    ui.label(tr(
+                        "Выберите страницы в списке слева и поверните их.",
+                        "Select pages in the list on the left and rotate them.",
+                    ));
+                    ui.horizontal(|ui| {
+                        let shortcut_left = ui.ctx().format_shortcut(&SHORTCUT_ROTATE_LEFT);
+                        let shortcut_right = ui.ctx().format_shortcut(&SHORTCUT_ROTATE_RIGHT);
+                        if ui.button(tr("↺ Влево 90°", "↺ Left 90°")).on_hover_text(shortcut_left).clicked() {
+                            self.rotate(&ctx, -90);
+                        }
+                        if ui.button(tr("↻ Вправо 90°", "↻ Right 90°")).on_hover_text(shortcut_right).clicked() {
+                            self.rotate(&ctx, 90);
+                        }
+                        if ui.button("180°").clicked() {
+                            self.rotate(&ctx, 180);
+                        }
+                    });
                 });
                 group(ui, tr("Удаление страниц", "Delete pages"), |ui| {
                     ui.label(tr("Выберите страницы в списке слева и нажмите «Удалить».", "Select pages in the list on the left and press “Delete”."));
@@ -904,6 +958,7 @@ impl PdfToolApp {
                 CardAction::ToStart => self.move_selection(&ctx, Move::To(0)),
                 CardAction::ToEnd => self.move_selection(&ctx, Move::To(usize::MAX)),
                 CardAction::Edit => self.open_editor(index),
+                CardAction::Rotate(degrees) => self.rotate(&ctx, degrees),
             }
         }
         if let Some((source, target)) = dropped
@@ -928,6 +983,13 @@ impl PdfToolApp {
                 if ui.button(label).clicked() {
                     self.move_selection(&ctx, how);
                 }
+            }
+            ui.separator();
+            if ui.button("↺").on_hover_text(tr("Повернуть влево на 90°", "Rotate left 90°")).clicked() {
+                self.rotate(&ctx, -90);
+            }
+            if ui.button("↻").on_hover_text(tr("Повернуть вправо на 90°", "Rotate right 90°")).clicked() {
+                self.rotate(&ctx, 90);
             }
         });
         let info = match &self.doc {
@@ -1205,6 +1267,8 @@ fn group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
 
 #[derive(Clone, Copy)]
 enum CardAction {
+    /// Поворот по часовой стрелке на столько градусов.
+    Rotate(i64),
     Edit,
     Delete,
     ToStart,
@@ -1281,6 +1345,16 @@ fn page_card(ui: &mut egui::Ui, index: usize, thumb: Option<&egui::TextureHandle
         }
         if ui.button(tr("Удалить", "Delete")).clicked() {
             action = Some(CardAction::Delete);
+        }
+        ui.separator();
+        if ui.button(tr("↺ Повернуть влево", "↺ Rotate left")).clicked() {
+            action = Some(CardAction::Rotate(-90));
+        }
+        if ui.button(tr("↻ Повернуть вправо", "↻ Rotate right")).clicked() {
+            action = Some(CardAction::Rotate(90));
+        }
+        if ui.button(tr("Повернуть на 180°", "Rotate 180°")).clicked() {
+            action = Some(CardAction::Rotate(180));
         }
         ui.separator();
         if ui.button(tr("Переместить в начало", "Move to start")).clicked() {

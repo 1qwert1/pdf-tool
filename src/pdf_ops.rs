@@ -374,6 +374,21 @@ pub fn delete_pages(doc: &mut Document, indices: &BTreeSet<usize>) -> Result<()>
     Ok(())
 }
 
+/// Поворачивает страницы (индексы с 0) на `degrees` по часовой стрелке (кратно 90).
+/// Меняется только атрибут /Rotate — содержимое, закладки и ссылки не затрагиваются.
+pub fn rotate_pages(doc: &mut Document, indices: &BTreeSet<usize>, degrees: i64) -> Result<()> {
+    let pages = page_ids(doc);
+    for &index in indices {
+        let id = *pages
+            .get(index)
+            .with_context(|| trf!("Страница {} не существует", "Page {} does not exist", index + 1))?;
+        let current = inherited_attr(doc, id, b"Rotate").and_then(|r| r.as_i64().ok()).unwrap_or(0);
+        let rotate = (current + degrees).rem_euclid(360) / 90 * 90;
+        doc.get_dictionary_mut(id)?.set("Rotate", rotate);
+    }
+    Ok(())
+}
+
 /// Переставляет страницы. `order[i]` — старый индекс страницы, которая станет i-й.
 pub fn reorder_pages(doc: &mut Document, order: &[usize]) -> Result<()> {
     let pages = page_ids(doc);
@@ -595,6 +610,28 @@ mod tests {
         let mut doc = new_document();
         insert_document(&mut doc, sample(2), 0).unwrap();
         assert_eq!(page_count(&roundtrip(&mut doc)), 2);
+    }
+
+    fn rotations(doc: &Document) -> Vec<i64> {
+        page_ids(doc)
+            .iter()
+            .map(|&id| inherited_attr(doc, id, b"Rotate").and_then(|r| r.as_i64().ok()).unwrap_or(0))
+            .collect()
+    }
+
+    #[test]
+    fn rotate_selected_pages() {
+        let mut doc = sample(3);
+        rotate_pages(&mut doc, &BTreeSet::from([0, 2]), 90).unwrap();
+        rotate_pages(&mut doc, &BTreeSet::from([2]), -90).unwrap();
+        rotate_pages(&mut doc, &BTreeSet::from([1]), 180).unwrap();
+        let mut doc = roundtrip(&mut doc);
+        assert_eq!(rotations(&doc), [90, 180, 0]);
+        // Полный оборот возвращает к 0, закладки на месте
+        rotate_pages(&mut doc, &BTreeSet::from([0]), 270).unwrap();
+        assert_eq!(rotations(&doc), [0, 180, 0]);
+        assert_eq!(toc(&doc), [("B1".into(), 1), ("B2".into(), 2), ("B3".into(), 3)]);
+        assert!(rotate_pages(&mut doc, &BTreeSet::from([5]), 90).is_err());
     }
 
     #[test]

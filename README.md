@@ -6,6 +6,7 @@ A desktop app for working with PDF files: a single native program written in Rus
 
 - **Create a PDF from images**: PNG, JPEG, BMP, GIF, TIFF, WebP. EXIF rotation is applied, transparency is flattened onto white, 16-bit and CMYK images are supported. JPEG files are embedded without re-encoding.
 - **Delete, reorder and insert pages** from images or another PDF. Bookmarks and internal links are preserved.
+- **Rotate pages** 90° left, 90° right or 180° (buttons, right-click menu, Ctrl+R / Ctrl+Shift+R). Only the page's /Rotate attribute changes, so content, bookmarks and links are untouched.
 - **Split into pages**: each page is saved as a separate PDF.
 - **Edit pages** (double-click a page or use the Text tab):
   - add text anywhere: click on the page and type right there. Three fonts with Cyrillic support (DejaVu Sans, Serif, Mono), bold, italic, size, color and any angle (rotation handle or angle field, 1° steps). Until applied, captions can be moved, rotated, edited and removed. Only the glyphs actually used are embedded, and the added text is searchable and copyable;
